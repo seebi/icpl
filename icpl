@@ -1,0 +1,277 @@
+#!/usr/bin/env php
+<?php
+/**
+ * a small script to calculate project time investments based on ical queries
+ *
+ * PHP version 5
+ * 
+ * @category Shell
+ * @package  CommandLine
+ * @author   Sebastian Tramp <mail@sebastian.tramp.name>
+ * @license  http://www.opensource.org/licenses/mit-license.php  MIT License
+ * @link     http://sebastian.tramp.name
+ */
+
+/**
+ * Remove E_STRICT from error_reporting settings since some PEAR methods cannot be
+ * used statically, even though they are intended to be used that way.
+ */
+error_reporting(error_reporting() & ~E_STRICT);
+
+require 'class.iCalReader.php';
+
+/**
+ * iCalCalc
+ *
+ * @category Shell
+ * @package  CommandLine
+ * @author   Sebastian Tramp <mail@sebastian.tramp.name>
+ * @license  http://www.opensource.org/licenses/mit-license.php  MIT License
+ * @link     http://sebastian.tramp.name
+ */
+class ICalCalc
+{
+    const NAME = 'iCalCalc';
+    const VERSION = '0.1';
+
+    /* Command Line Parameter Config */
+    private $_argConfig = array();
+
+    /* Command Line Parameter Getarg Object */
+    private $_args;
+
+    /* Required PEAR Packages */
+    private $_pearPackages = array(
+        'Console/Getargs.php',
+        'Console/Table.php'
+    );
+
+    /* the current calendar */
+    private $_iCal;
+
+    /* event array of the current ical file */
+    private $_events = array();
+
+    /* the subset of events, filtered according to the call */
+    private $_filteredEvents = array();
+
+    /**
+     * constructor
+     */
+    public function __construct()
+    {
+        // load pear packages
+        $this->_checkPearPackages();
+        // check command line parameters
+        $this->_checkCommandLineArguments();
+        // process the call
+        $this->_process();
+    }
+
+    /**
+     * parse input files
+     *
+     * @return boolean
+     */
+    private function _parseFiles()
+    {
+        $this->_iCal           = new ICal('basic.ics');
+        $this->_events         = $this->_iCal->cal['VEVENT'];
+        $this->_filteredEvents = $this->_events;
+
+        // set timezone to calender zone (or default value)
+        if (isset($this->iCal->cal['VTIMEZONE']['TZID'])) {
+            date_default_timezone_set($this->iCal->cal['VTIMEZONE']['TZID']);
+        } else {
+            date_default_timezone_set('Europe/Berlin');
+        }
+        $this->_echoDebug(count($this->_events) . ' events parsed.');
+    }
+
+    /**
+     * filter event array using the query on the summary
+     *
+     * @return boolean
+     */
+    private function _filterByQuery()
+    {
+        if (!$this->args->isDefined('query')) {
+            return false;
+        }
+        $query = $this->args->getValue('query');
+
+        // step 1: filter by summary
+        $filtered = array();
+        foreach ($this->_filteredEvents as $event) {
+            $summary = $event['SUMMARY'];
+            if (strpos($summary, $query) === 0) {
+                $filtered[] = $event;
+            }
+        }
+        $this->_filteredEvents = $filtered;
+        $this->_echoDebug(count($filtered) . ' events matching "' . $query . '".');
+        return true;
+    }
+
+    /**
+     * process / control the call
+     *
+     * @return boolean
+     */
+    private function _process()
+    {
+        $this->_parseFiles();
+        $this->_filterByQuery();
+        // step 2: filter by interval
+        // todo
+
+        // step 3: count total seconds
+        $events         = $this->_filteredEvents;
+        $totalSeconds   = 0;
+        $filteredEvents = array();
+        foreach ($events as $event) {
+            $start  = new DateTime($event['DTSTART']);
+            $end    = new DateTime($event['DTEND']);
+            $length = $end->getTimestamp() - $start->getTimestamp();
+            $totalSeconds += $length;
+            //echo $length/60/60 . PHP_EOL;
+        }
+        echo $totalSeconds/60/60 . ' hours counted.' . PHP_EOL;
+        //echo date('Ymd\THis', strtotime("january")).PHP_EOL;
+        return true;
+    }
+
+    /**
+     * Generate command line parameter array for Console_Getargs
+     *
+     * @return boolean
+     */
+    private function _checkCommandLineArguments()
+    {
+        $this->argConfig = array(
+            'file' => array(
+                'short' => 'f',
+                'min' => 1,
+                'max' => -1,
+                'desc' => 'set the calendar location to process'
+            ),
+
+            'query' => array(
+                'short' => 'q',
+                'min' => 1,
+                'max' => 1,
+                'desc' => 'set the query string to look for'
+            ),
+
+            'debug' => array(
+                'short' => 'd',
+                'max' => 0,
+                'desc' => 'Output some debug infos'
+            ),
+
+            'raw' => array(
+                'short' => 'r',
+                'max' => 0,
+                'desc' => 'Outputs raw json results'
+            ),
+
+            'help' => array(
+                'short' => 'h',
+                'max' => 0,
+                'desc' => 'Show this screen'
+            ),
+        );
+
+        $basename = basename($_SERVER['SCRIPT_NAME']);
+        $header = self::NAME . ' ' . self::VERSION . PHP_EOL .
+            'Usage: ' . $basename . ' [options]' .
+            PHP_EOL . PHP_EOL;
+
+        $this->args =& Console_Getargs::factory($this->argConfig);
+
+        if (PEAR::isError($this->args)) {
+            if ($this->args->getCode() === CONSOLE_GETARGS_ERROR_USER) {
+                $this->_echoError($this->args->getMessage());
+                $this->_echoError(
+                    PHP_EOL . 'Try "'. $basename . ' --help" for more information'
+                );
+            } elseif ($this->args->getCode() === CONSOLE_GETARGS_HELP) {
+                $this->_echoError(
+                    Console_Getargs::getHelp($this->argConfig, $header)
+                );
+            }
+            die();
+        } elseif (count($this->args->args) == 0) {
+            $this->_echoError(self::NAME ." ". self::VERSION);
+            $this->_echoError('Try "' . $basename . ' --help" for more information');
+            exit();
+        }
+
+        // create command list, use shortcut, if available
+        if ($this->args->isDefined('listModels')) {
+            $this->commandList[] = 'store:listModels';
+        }
+        // create command list, use shortcut, if available
+        if ($this->args->isDefined('listProcedures')) {
+            $this->commandList[] = 'meta:listAllProcedures';
+        }
+        // append -e commands to the end to the command queue
+        if ( count((array) $this->args->getValue('execute')) > 0 ) {
+            foreach ((array) $this->args->getValue('execute') as $command) {
+                $this->commandList[] = $command;
+            }
+        }
+    }
+
+    /**
+     * Write STDERR-String
+     *
+     * @param string $string error message
+     *
+     * @return boolean
+     */
+    private function _echoError ($string = '')
+    {
+        fwrite(STDERR, $string . PHP_EOL);
+        return true;
+    }
+
+    /**
+     * Write STDERR-String if Debug-Mode on
+     *
+     * @param string $string debug message
+     *
+     * @return boolean
+     */
+    private function _echoDebug ($string = '')
+    {
+        if ($this->args->isDefined('debug')) {
+            fwrite(STDERR, $string . PHP_EOL);
+        }
+    }
+    /**
+     * Load required PEAR Packages or die if a package does not exists
+     *
+     * @return boolean
+     */
+    private function _checkPearPackages()
+    {
+        foreach ($this->_pearPackages as $package) {
+            if (!@include_once $package ) {
+                $packageName = str_replace('.php', '', $package);
+                $packageName = str_replace('/', '_', $packageName);
+                $this->_echoError("PEAR package $package needed!");
+                $this->_echoError(
+                    "Mostly, you can install it with " .
+                    "'sudo pear install $packageName' ..."
+                );
+                die();
+            }
+        }
+        return true;
+    }
+}
+
+// start the programm
+$owcli = new ICalCalc();
+
